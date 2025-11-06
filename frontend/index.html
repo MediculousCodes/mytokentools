@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Text File Token Counter</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Text File Token Counter</h1>
+            <p class="subtitle">Upload a .txt file to count its tokens</p>
+        </header>
+
+        <main>
+            <div class="upload-section">
+                <div class="file-input-wrapper">
+                    <input type="file" id="fileInput" accept=".txt" />
+                    <label for="fileInput" class="file-label">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                            <polyline points="17 8 12 3 7 8"></polyline>
+                            <line x1="12" y1="3" x2="12" y2="15"></line>
+                        </svg>
+                        <span id="fileName">Choose a .txt file</span>
+                    </label>
+                </div>
+                
+                <button id="calculateBtn" class="calculate-btn" disabled>
+                    Calculate Tokens
+                </button>
+            </div>
+
+            <div id="result" class="result hidden">
+                <div class="result-content">
+                    <span class="result-label">Token Count:</span>
+                    <span id="tokenCount" class="token-count">0</span>
+                </div>
+            </div>
+
+            <div id="error" class="error hidden"></div>
+
+            <div class="info-section">
+                <h2>What is Tokenization?</h2>
+                <p>
+                    Tokenization is the process by which Large Language Models (LLMs) break down text into smaller units called "tokens." 
+                    These tokens can be words, parts of words, or even individual characters. Since computers cannot directly understand 
+                    human language, they convert text into these numerical tokens that can be processed mathematically. This is a 
+                    fundamental step that allows AI models to analyze, understand, and generate text.
+                </p>
+                <p>
+                    Different languages and writing systems tokenize differently, but for English text, a useful rule of thumb is that 
+                    <strong>100 tokens is approximately equal to 75 words</strong>. This means that a typical sentence of 15-20 words 
+                    might use around 20-25 tokens. Understanding token counts is important because many AI services charge based on the 
+                    number of tokens processed, and models have maximum token limits for their inputs and outputs.
+                </p>
+                <p>
+                    This tool uses OpenAI's <code>cl100k_base</code> encoding, which is the same tokenizer used by models like GPT-4 
+                    and GPT-3.5-turbo. By uploading your text file, you can see exactly how many tokens it contains and better estimate 
+                    costs and compatibility with various AI services.
+                </p>
+            </div>
+        </main>
+
+        <footer>
+            <p>Built with Flask, tiktoken, and Docker</p>
+        </footer>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
