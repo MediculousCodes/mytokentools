@@ -1,33 +1,38 @@
 import type { Metadata } from 'next'
-import { Geist, Geist_Mono } from 'next/font/google'
+// 1. Comment out the font import
+// import { Geist, Geist_Mono } from 'next/font/google' 
 import { Analytics } from '@vercel/analytics/next'
+import ThemeToggle from './components/ThemeToggle'
 import './globals.css'
 
-const _geist = Geist({ subsets: ["latin"] });
-const _geistMono = Geist_Mono({ subsets: ["latin"] });
+// 2. Comment out the font variables
+// const _geist = Geist({ subsets: ["latin"] });
+// const _geistMono = Geist_Mono({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  // 1. Title changed here
-  title: 'myTokenTools', 
-  description: 'Created with v0',
-  generator: 'v0.app',
-  // 2. Icon (favicon) added here
-  icons: {
-    icon: '/favicon.ico', // Or '/logo.png', '/icon.svg', etc.
-  },
+  title: 'myTokenTools', 
+  description: 'Created with v0',
+  generator: 'v0.app',
+  icons: {
+    icon: '/favicon.ico',
+  },
 }
 
 export default function RootLayout({
-  children,
+  children,
 }: Readonly<{
-  children: React.ReactNode
+  children: React.React.Node
 }>) {
-  return (
-    <html lang="en">
-      <body className={`font-sans antialiased`}>
-        {children}
-        <Analytics />
-      </body>
-    </html>
-  )
+  return (
+    <html lang="en">
+      {/* 3. Remove the font variable from the body className */}
+      <body className={`font-sans antialiased`}>
+      <div style={{position:'fixed', right:16, top:16, zIndex:999}}>
+        <ThemeToggle />
+      </div>
+        {children}
+        <Analytics />
+      </body>
+    </html>
+  )
 }

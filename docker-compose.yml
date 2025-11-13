@@ -1,7 +1,5 @@
 # token-counter-docker/docker-compose.yml
 
-version: '3.8'
-
 services:
   backend:
     build:
@@ -10,6 +8,9 @@ services:
     container_name: token-counter-backend
     ports:
       - "5000:5000"
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     environment:
       - FLASK_ENV=development
     networks:
@@ -23,6 +24,9 @@ services:
     container_name: token-counter-frontend
     ports:
       - "3000:3000" # Next.js runs on port 3000
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     depends_on:
       - backend
     networks:

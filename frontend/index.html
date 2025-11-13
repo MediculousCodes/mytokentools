@@ -1,73 +1,151 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Text File Token Counter</title>
-    <link rel="stylesheet" href="styles.css">
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>myTokenTools</title>
+
+    <link rel="icon" href="favicon.ico" />
+    <link rel="stylesheet" href="styles.css" />
+
+    <!-- Tailwind CDN for rapid prototyping (replace with compiled Tailwind for production) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- Chart.js for visualizations -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
-<body>
-    <div class="container">
-        <header>
-            <h1>Text File Token Counter</h1>
-            <p class="subtitle">Upload a .txt file to count its tokens</p>
+<body class="bg-slate-50 text-slate-800">
+    <div class="max-w-4xl mx-auto p-6">
+        <header class="flex items-center justify-between mb-6">
+            <div class="flex items-center gap-3">
+                <img src="/logo.svg" alt="myTokenTools logo" class="h-8 w-8" />
+                <div>
+                  <h1 class="text-3xl font-semibold text-slate-900">myTokenTools</h1>
+                  <p class="text-sm text-slate-500">Upload .txt, .md or .zip files to count tokens</p>
+                </div>
+            </div>
+
+            <div class="flex items-center gap-4">
+                <nav class="text-xs text-slate-500">
+                    <a href="/about.html" class="mr-3 underline">About</a>
+                    <a href="/howitworks.html" class="mr-3 underline">How it works</a>
+                    <a href="/settings.html" class="underline">Settings</a>
+                </nav>
+                <div class="text-right text-xs text-slate-500">Built with Flask · tiktoken · Docker</div>
+                <button id="themeToggle" class="ml-4 px-2 py-1 border rounded text-sm" aria-pressed="false">Dark</button>
+            </div>
         </header>
 
-        <main>
-            <div class="upload-section">
-                <div class="file-input-wrapper">
-                    <input type="file" id="fileInput" accept=".txt" />
-                    <label for="fileInput" class="file-label">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                            <polyline points="17 8 12 3 7 8"></polyline>
-                            <line x1="12" y1="3" x2="12" y2="15"></line>
-                        </svg>
-                        <span id="fileName">Choose a .txt file</span>
-                    </label>
+        <main class="bg-white shadow rounded-lg p-6">
+            <section class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div>
+                    <div class="flex justify-between items-center mb-2">
+                      <label class="block text-sm font-medium text-slate-700">Upload files</label>
+                      <div class="text-xs text-slate-500">Supported: .txt, .md, .zip</div>
+                    </div>
+
+                    <div id="dropzone" class="group relative flex items-center gap-3 p-4 border-2 border-dashed border-slate-200 rounded-md bg-white hover:border-indigo-300 transition">
+                        <div class="flex-shrink-0 p-3 rounded-md bg-slate-50 group-hover:bg-indigo-50">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-slate-500 group-hover:text-indigo-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                              <polyline points="17 8 12 3 7 8"/>
+                              <line x1="12" y1="3" x2="12" y2="15"/>
+                            </svg>
+                        </div>
+
+                        <div class="flex-1 min-w-0">
+                            <div id="fileName" class="text-sm text-slate-600">Drag & drop files here, or <button id="browseBtn" class="text-indigo-600 font-medium underline">browse</button></div>
+                            <div id="fileHint" class="text-xs text-slate-400 mt-1">Max 10 MB per .txt/.md file. .zip files allowed (no size limit; server will unzip and process). Multiple files supported.</div>
+                        </div>
+
+                        <div class="ml-3 flex items-center gap-2">
+                            <button id="calculateBtn" class="inline-flex items-center px-4 py-2 bg-indigo-600 text-white rounded-md disabled:opacity-50" disabled>Analyze</button>
+                        </div>
+
+                        <input type="file" id="fileInput" accept=".txt,.md,.zip" class="hidden" multiple />
+                    </div>
+
+                    <div class="mt-3 flex items-center gap-2">
+                      <div id="queueInfo" class="text-sm text-slate-600">No files queued</div>
+                      <button id="clearAllBtn" class="ml-auto text-sm text-red-600 underline hidden">Clear All</button>
+                    </div>
+
+                    <div id="uploadProgress" class="mt-3 hidden">
+                        <div class="h-2 bg-slate-100 rounded overflow-hidden">
+                            <div id="uploadBar" class="h-2 bg-indigo-600 w-0"></div>
+                        </div>
+                        <div id="uploadStatus" class="text-xs text-slate-500 mt-1">Waiting…</div>
+                    </div>
+
+                    <p id="helpText" class="mt-3 text-sm text-slate-500">
+                        Uses OpenAI cl100k_base tokenizer. Upload plaintext (.txt, .md) or .zip archives. For larger jobs consider batch processing.
+                    </p>
+
+                    <div id="error" class="mt-4 hidden text-sm text-red-600"></div>
                 </div>
-                
-                <button id="calculateBtn" class="calculate-btn" disabled>
-                    Calculate Tokens
-                </button>
-            </div>
 
-            <div id="result" class="result hidden">
-                <div class="result-content">
-                    <span class="result-label">Token Count:</span>
-                    <span id="tokenCount" class="token-count">0</span>
+                <div>
+                    <div id="result" class="hidden bg-slate-50 border border-slate-100 rounded-md p-4">
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <div class="text-sm text-slate-500">Token Count</div>
+                                <div id="tokenCount" class="text-3xl font-semibold text-slate-900">0</div>
+                            </div>
+
+                            <div class="w-40">
+                                <div class="text-sm text-slate-500">Estimated cost</div>
+                                <div id="estimate" class="text-lg font-medium text-green-600">$0.00</div>
+                            </div>
+                        </div>
+
+                                                <div class="mt-4">
+                                                        <canvas id="tokenChart" height="120"></canvas>
+                                                </div>
+                                                <div class="mt-3 flex gap-2">
+                                                    <button id="copyBtn" class="px-3 py-1 bg-slate-100 rounded text-sm">Copy Summary</button>
+                                                </div>
+                    </div>
+
+                    <div id="processing" class="hidden mt-4 p-3 rounded-md bg-yellow-50 text-yellow-800 text-sm">
+                        <div class="flex items-center gap-3" role="status" aria-live="polite">
+                            <svg id="processingSpinner" class="h-5 w-5 text-yellow-800 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" aria-hidden="true">
+                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+                            </svg>
+                            <div>
+                                <div class="font-medium">Processing…</div>
+                                <div class="text-xs text-yellow-700">This may take a few seconds. Results will appear when ready.</div>
+                            </div>
+                        </div>
+                     </div>
+
+                    <div id="historyPreview" class="mt-4 text-sm text-slate-500">
+                        <strong>History</strong>
+                        <p class="mt-1">Sign in to save and view past analyses. (Auth & DB recommended — see suggestions below.)</p>
+                    </div>
                 </div>
-            </div>
+            </section>
 
-            <div id="error" class="error hidden"></div>
-
-            <div class="info-section">
-                <h2>What is Tokenization?</h2>
-                <p>
-                    Tokenization is the process by which Large Language Models (LLMs) break down text into smaller units called "tokens." 
-                    These tokens can be words, parts of words, or even individual characters. Since computers cannot directly understand 
-                    human language, they convert text into these numerical tokens that can be processed mathematically. This is a 
-                    fundamental step that allows AI models to analyze, understand, and generate text.
-                </p>
-                <p>
-                    Different languages and writing systems tokenize differently, but for English text, a useful rule of thumb is that 
-                    <strong>100 tokens is approximately equal to 75 words</strong>. This means that a typical sentence of 15-20 words 
-                    might use around 20-25 tokens. Understanding token counts is important because many AI services charge based on the 
-                    number of tokens processed, and models have maximum token limits for their inputs and outputs.
-                </p>
-                <p>
-                    This tool uses OpenAI's <code>cl100k_base</code> encoding, which is the same tokenizer used by models like GPT-4 
-                    and GPT-3.5-turbo. By uploading your text file, you can see exactly how many tokens it contains and better estimate 
-                    costs and compatibility with various AI services.
-                </p>
-            </div>
+            <section class="mt-6">
+                <h2 class="text-lg font-medium text-slate-900 mb-2">What is Tokenization?</h2>
+                <div class="text-sm text-slate-600 space-y-3">
+                    <p>
+                        Tokenization is the process by which Large Language Models (LLMs) break down text into smaller units called "tokens."
+                        Tokens can be words, subwords, or characters. This tool uses the cl100k_base tokenizer (used by GPT-4 and GPT-3.5-turbo).
+                    </p>
+                    <p>
+                        100 tokens ≈ 75 words (rule of thumb). Knowing token counts helps estimate cost and compatibility with model limits.
+                    </p>
+                </div>
+            </section>
         </main>
 
-        <footer>
-            <p>Built with Flask, tiktoken, and Docker</p>
+        <footer class="mt-6 text-center text-xs text-slate-400">
+            © myTokenTools
         </footer>
     </div>
 
+    <!-- behavior moved to script.js -->
     <script src="script.js"></script>
 </body>
 </html>
