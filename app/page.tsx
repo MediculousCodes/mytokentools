@@ -72,7 +72,21 @@ const TextArea: FC<React.TextareaHTMLAttributes<HTMLTextAreaElement>> = ({ class
 
 const Sidebar: FC<{ currentPage: string }> = ({ currentPage }) => {
     const { setCurrentPage } = useAppContext();
-    const navItems = ["Upload", "Analyze", "Compare", "Chunking", "Pricing", "API", "Batch", "History", "Learn", "Settings"];
+    // ADDED "How It Works" and "About" to the nav list
+    const navItems = [
+        "Upload", 
+        "Analyze", 
+        "Compare", 
+        "Chunking", 
+        "Pricing", 
+        "API", 
+        "Batch", 
+        "History", 
+        "Learn", 
+        "How It Works", // <-- ADDED
+        "Settings",
+        "About" // <-- ADDED
+    ];
     return (
         <div className="w-60 bg-gray-50 p-6 border-r border-gray-200 flex-shrink-0 h-screen sticky top-0 overflow-y-auto">
             <h2 className="text-2xl font-bold text-indigo-600 mb-8">Token Tools</h2>
@@ -110,7 +124,7 @@ const UploadPage: FC = () => {
     const onDrop = useCallback((acceptedFiles: File[], rejectedFiles: any[]) => {
         setError(null);
         if (rejectedFiles.length > 0) {
-            setError("Some files were rejected. Please upload .txt files under 5MB.");
+            setError("Some files were rejected. Please upload .txt, .md, or .zip files.");
             return;
         }
         if (acceptedFiles.length > 0) {
@@ -121,8 +135,13 @@ const UploadPage: FC = () => {
 
     const { getRootProps, getInputProps, isDragActive } = useDropzone({
         onDrop,
-        accept: { 'text/plain': ['.txt'] },
-        maxSize: 5 * 1024 * 1024,
+        // Restore support for ZIP and Markdown
+        accept: { 
+            'text/plain': ['.txt', '.md'], 
+            'application/zip': ['.zip'],
+            'application/x-zip-compressed': ['.zip']
+        },
+        // No max size limit for ZIPs (handled by server)
     });
 
     return (
@@ -131,9 +150,9 @@ const UploadPage: FC = () => {
             <div {...getRootProps()} className={`p-16 border-3 border-dashed rounded-xl cursor-pointer transition-colors text-center ${isDragActive ? 'border-indigo-700 bg-indigo-50' : 'border-indigo-500 bg-gray-50'}`}>
                 <input {...getInputProps()} />
                 <p className="text-indigo-700 font-medium">
-                    {isDragActive ? 'Drop the files here...' : 'Drag & drop .txt files, or click to select'}
+                    {isDragActive ? 'Drop the files here...' : 'Drag & drop files, or click to select'}
                 </p>
-                <p className="text-sm text-gray-500 mt-2">Max 5MB per file. Allowed type: .txt</p>
+                <p className="text-sm text-gray-500 mt-2">Supported: .txt, .md, .zip</p>
             </div>
             {error && <div className="mt-4 p-3 bg-red-100 text-red-700 rounded-md">{error}</div>}
         </div>
@@ -142,35 +161,46 @@ const UploadPage: FC = () => {
 
 const AnalyzePage: FC = () => {
     const { files, tokenizer, addToHistory } = useAppContext();
-    const [selectedFile, setSelectedFile] = useState<File | null>(null);
     const [analysis, setAnalysis] = useState<any>(null);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [copyLabel, setCopyLabel] = useState("Copy Summary");
 
     useEffect(() => {
-        if (files.length > 0) {
-            setSelectedFile(files[0]);
-        }
-    }, [files]);
-    
-    useEffect(() => {
-        const analyze = async (file: File) => {
+        const analyzeFiles = async () => {
+            if (files.length === 0) return;
+            
             setIsLoading(true);
             setError(null);
+            
             try {
-                const text = await file.text();
-                const response = await fetch('http://localhost:5000/analyze', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ text, encoding: tokenizer }),
+                // Use FormData to support ZIPs and multiple files like the original app
+                const formData = new FormData();
+                files.forEach((file, i) => {
+                    formData.append(`file${i}`, file);
                 });
+                formData.append('encoding', tokenizer);
+
+                // FIXED: Use relative path. Next.js will proxy this.
+                const response = await fetch('/api/count-tokens', {
+                    method: 'POST',
+                    body: formData, // No Content-Type header needed (browser sets it for FormData)
+                });
+
                 if (!response.ok) throw new Error(`Server error: ${response.statusText}`);
                 const data = await response.json();
+                
                 if (data.error) throw new Error(data.error);
                 
-                const result = { ...data, fileName: file.name, avgTokensPerWord: (data.token_count / data.word_count).toFixed(2) };
-                setAnalysis(result);
-                addToHistory({ type: 'analyze', ...result, date: new Date().toISOString() });
+                // The API returns { files: [...], total_tokens: ... }
+                setAnalysis(data);
+                
+                addToHistory({ 
+                    type: 'analyze', 
+                    fileNames: files.map(f => f.name),
+                    totalTokens: data.total_tokens, 
+                    date: new Date().toISOString() 
+                });
             } catch (err: any) {
                 setError(err.message);
             } finally {
@@ -178,40 +208,138 @@ const AnalyzePage: FC = () => {
             }
         };
 
-        if (selectedFile) {
-            analyze(selectedFile);
-        } else {
-            setAnalysis(null);
-        }
-    }, [selectedFile, tokenizer, addToHistory]);
+        analyzeFiles();
+    }, [files, tokenizer, addToHistory]);
+
+    const handleCopy = () => {
+        if (!analysis) return;
+        const summary = `Total Tokens: ${analysis.total_tokens}\n` + 
+                        analysis.files.map((f: any) => `${f.name}: ${f.token_count} tokens`).join('\n');
+        navigator.clipboard.writeText(summary);
+        setCopyLabel("Copied!");
+        setTimeout(() => setCopyLabel("Copy Summary"), 2000);
+    };
 
     if (files.length === 0) return <p>Upload a file on the Upload page to begin analysis.</p>;
 
     return (
         <div>
-            <div className="flex justify-between items-center mb-2">
-                <h1 className="text-4xl font-bold">Analysis</h1>
-                {files.length > 0 && (
-                    <Select value={selectedFile?.name || ''} onChange={e => setSelectedFile(files.find(f => f.name === e.target.value) || null)}>
-                        <option value="" disabled>Select a file</option>
-                        {files.map(file => <option key={file.name} value={file.name}>{file.name}</option>)}
-                    </Select>
+            <div className="flex justify-between items-center mb-6">
+                <h1 className="text-4xl font-bold">Analysis Result</h1>
+                {analysis && (
+                    <Button onClick={handleCopy} className="bg-gray-200 text-gray-800 hover:bg-gray-300">
+                        {copyLabel}
+                    </Button>
                 )}
             </div>
-            {isLoading && <p>Analyzing {selectedFile?.name}...</p>}
-            {error && <p className="text-red-500">{error}</p>}
+
+            {isLoading && (
+                <div className="p-8 bg-yellow-50 text-yellow-800 rounded-md flex items-center gap-3">
+                    <div className="animate-spin h-5 w-5 border-2 border-yellow-800 border-t-transparent rounded-full"></div>
+                    Processing files... (This handles ZIP extraction on the server)
+                </div>
+            )}
+            
+            {error && <div className="p-4 bg-red-100 text-red-700 rounded-md">{error}</div>}
+
             {analysis && !isLoading && (
-                <div className="space-y-6 mt-8">
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                        <Card><p className="text-gray-500">Token Count</p><p className="text-3xl font-bold">{analysis.token_count?.toLocaleString()}</p></Card>
-                        <Card><p className="text-gray-500">Word Count</p><p className="text-3xl font-bold">{analysis.word_count?.toLocaleString()}</p></Card>
-                        <Card><p className="text-gray-500">Avg Tokens/Word</p><p className="text-3xl font-bold">{analysis.avgTokensPerWord}</p></Card>
+                <div className="space-y-6">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <Card>
+                            <p className="text-gray-500">Total Token Count</p>
+                            <p className="text-4xl font-bold text-indigo-600">{analysis.total_tokens?.toLocaleString()}</p>
+                        </Card>
+                        <Card>
+                            <p className="text-gray-500">Estimated Cost (GPT-4 input)</p>
+                            <p className="text-4xl font-bold text-green-600">
+                                ${(analysis.total_tokens * 0.00003).toFixed(4)}
+                            </p>
+                        </Card>
                     </div>
+
+                    <Card>
+                        <h3 className="font-bold text-lg mb-4">File Details</h3>
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-left">
+                                <thead>
+                                    <tr className="border-b">
+                                        <th className="py-2">Filename</th>
+                                        <th className="py-2 text-right">Tokens</th>
+                                        <th className="py-2 text-right">Words</th>
+                                        <th className="py-2 text-right">Chars</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {analysis.files.map((f: any, i: number) => (
+                                        <tr key={i} className="border-b last:border-b-0 hover:bg-gray-50">
+                                            <td className="py-2">{f.name}</td>
+                                            <td className="py-2 text-right font-mono">{f.token_count.toLocaleString()}</td>
+                                            <td className="py-2 text-right text-gray-500">{f.words.toLocaleString()}</td>
+                                            <td className="py-2 text-right text-gray-500">{f.chars.toLocaleString()}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </Card>
                 </div>
             )}
         </div>
     );
 };
+
+// ADDED
+const HowItWorksPage: FC = () => (
+    <div className="space-y-6 max-w-3xl">
+        <PageTitle title="How it works" subtitle="Under the hood of myTokenTools." />
+        <Card>
+            <h3 className="font-bold text-lg mb-2">File Processing</h3>
+            <p className="text-gray-700 mb-4">
+                You can upload <strong>plaintext (.txt, .md)</strong> or <strong>ZIP archives</strong>. 
+                When you upload a ZIP file, the server automatically unzips it in memory and processes every text file inside it.
+            </p>
+            <h3 className="font-bold text-lg mb-2">Tokenization Engine</h3>
+            <p className="text-gray-700 mb-4">
+                We use the <code>tiktoken</code> library (specifically the <code>cl100k_base</code> encoding) which is identical 
+                to the tokenizer used by OpenAI's GPT-3.5 and GPT-4 models. This ensures 100% accuracy for cost estimation.
+            </p>
+            <h3 className="font-bold text-lg mb-2">Performance</h3>
+            <p className="text-gray-700">
+                For very large jobs, a production version of this system would enqueue background workers (using Celery/Redis) 
+                to process files asynchronously to avoid timeouts.
+            </p>
+        </Card>
+        <div className="text-sm text-gray-500 mt-4">
+            © myTokenTools
+        </div>
+    </div>
+);
+
+// ADDED 
+const AboutPage: FC = () => (
+    <div className="space-y-6 max-w-3xl">
+        <PageTitle title="About myTokenTools" subtitle="Simple, secure token counting." />
+        <Card>
+            <p className="text-gray-700 leading-relaxed">
+                myTokenTools helps you estimate token counts for files using the <strong>cl100k_base</strong> tokenizer 
+                (the same one used by GPT-4 and GPT-3.5). It is built for quick analysis, pricing estimation, and prototyping.
+            </p>
+            <p className="text-gray-700 mt-4">
+                This project serves as a modern example of a full-stack application using:
+            </p>
+            <ul className="list-disc list-inside mt-2 text-gray-600 ml-4">
+                <li><strong>Next.js 15</strong> for the frontend</li>
+                <li><strong>Flask (Python)</strong> for the backend API</li>
+                <li><strong>Tiktoken</strong> for accurate tokenization</li>
+                <li><strong>Docker</strong> for containerization</li>
+            </ul>
+        </Card>
+        <div className="text-sm text-gray-500 mt-8">
+            © myTokenTools — <a href="https://github.com/MediculousCodes/mytokentools" className="text-indigo-600 hover:underline">GitHub</a>
+        </div>
+    </div>
+);
+
 
 const ComparePage: FC = () => {
     const { files, addToHistory } = useAppContext();
@@ -232,7 +360,8 @@ const ComparePage: FC = () => {
         try {
             const text = await file.text();
             const encodings = ["cl100k_base", "p50k_base", "r50k_base", "gpt2"];
-            const response = await fetch('http://localhost:5000/compare_tokenizers', {
+            // FIXED: Use relative path
+            const response = await fetch('/compare_tokenizers', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ text, encodings }),
@@ -361,7 +490,8 @@ const PricingPage: FC = () => {
         if (files.length > 0) {
             const getTokenCount = async () => {
                 const text = await files[0].text();
-                const response = await fetch('http://localhost:5000/analyze', {
+                // FIXED: Use relative path
+                const response = await fetch('/analyze', {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ text, encoding: 'cl100k_base' }),
                 });
@@ -406,7 +536,8 @@ const ApiPage: FC = () => {
     
     const callApi = async () => {
         setIsLoading(true);
-        const res = await fetch('http://localhost:5000/analyze', {
+        // FIXED: Use relative path
+        const res = await fetch('/analyze', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ text, encoding: 'cl100k_base' }),
         });
@@ -449,7 +580,8 @@ const BatchPage: FC = () => {
         const texts = await Promise.all(files.map(f => f.text()));
         
         try {
-            const response = await fetch('http://localhost:5000/batch_tokenize', {
+            // FIXED: Use relative path
+            const response = await fetch('/batch_tokenize', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ texts, encoding: tokenizer }),
@@ -552,21 +684,26 @@ const SettingsPage: FC = () => {
     return (
         <div>
             <PageTitle title="Settings" subtitle="Configure your token analysis preferences." />
-            <Card className="max-w-md">
-                <div className="space-y-6">
-                    <div>
-                        <label className="block text-sm font-medium text-gray-700">Default Tokenizer</label>
-                        <Select value={tokenizer} onChange={e => setTokenizer(e.target.value)} className="mt-1 w-full">
-                            <option value="cl100k_base">cl100k_base (GPT-4, GPT-3.5)</option>
-                            <option value="p50k_base">p50k_base (Codex models)</option>
-                            <option value="r50k_base">r50k_base (GPT-3)</option>
-                            <option value="gpt2">gpt2 (GPT-2)</option>
-                        </Select>
-                    </div>
-                     <div>
-                        <label className="block text-sm font-medium text-gray-700">Manage Data</label>
-                         <Button onClick={clearHistory} className="mt-1 bg-red-600 hover:bg-red-700">Clear Local History</Button>
-                    </div>
+            <Card className="max-w-md space-y-6">
+                <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Default Tokenizer</label>
+                    <Select value={tokenizer} onChange={e => setTokenizer(e.target.value)} className="w-full">
+                        <option value="cl100k_base">cl100k_base (GPT-4, GPT-3.5)</option>
+                        <option value="p50k_base">p50k_base (Codex models)</option>
+                        <option value="r50k_base">r50k_base (GPT-3)</option>
+                        <option value="gpt2">gpt2 (GPT-2)</option>
+                    </Select>
+                </div>
+                
+                <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Data Retention</label>
+                    <p className="text-sm text-gray-500 mb-3">
+                        Auto-delete uploaded files after 24 hours (server-side). 
+                        Local history is stored in your browser.
+                    </p>
+                    <Button onClick={clearHistory} className="bg-red-600 hover:bg-red-700 w-full">
+                        Clear Local History
+                    </Button>
                 </div>
             </Card>
         </div>
@@ -608,7 +745,9 @@ const App: FC = () => {
             case 'batch': return <BatchPage />;
             case 'history': return <HistoryPage />;
             case 'learn': return <LearnPage />;
+            case 'how it works': return <HowItWorksPage />; // <-- ADDED
             case 'settings': return <SettingsPage />;
+            case 'about': return <AboutPage />; // <-- ADDED
             default: return <UploadPage />;
         }
     };

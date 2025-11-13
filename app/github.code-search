@@ -1,0 +1,14 @@
+# Query: github
+# ContextLines: 1
+
+4 results - 2 files
+
+app/page.tsx:
+  335          <div className="text-sm text-gray-500 mt-8">
+  336:             © myTokenTools — <a href="https://github.com/MediculousCodes/mytokentools" className="text-indigo-600 hover:underline">GitHubs</a>
+  337          </div>
+
+frontend/about.html:
+  17      </main>
+  18:     <footer class="mt-6 text-xs text-slate-400">© myTokenTools — <a href="https://github.com/MediculousCodes/mytokentools" class="underline">GitHuba</a></footer>
+  19    </div>

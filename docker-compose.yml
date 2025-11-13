@@ -5,6 +5,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      network: host # <-- ADD THIS: Use host networking for faster package downloads during build
     container_name: token-counter-backend
     ports:
       - "5000:5000"
@@ -21,6 +22,7 @@ services:
     build:
       context: . # Build from the root directory
       dockerfile: Dockerfile.frontend # Use the new Dockerfile
+      network: host # <-- ADD THIS: Also speeds up frontend 'pnpm install'
     container_name: token-counter-frontend
     ports:
       - "3000:3000" # Next.js runs on port 3000
