@@ -1,0 +1,5 @@
+mytokentools.jeremyjohnsonwall.com {
+# This block tells Caddy to "proxy" all traffic
+# to your 'frontend' container on port 3000.
+reverse_proxy frontend:3000
+}

@@ -5,13 +5,10 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-      network: host # <-- ADD THIS: Use host networking for faster package downloads during build
+      # Use host networking for faster package downloads during build
+      network: host
     container_name: token-counter-backend
-    ports:
-      - "5000:5000"
-    dns:
-      - 8.8.8.8
-      - 1.1.1.1
+    # No ports needed; Caddy and frontend will use the internal Docker network
     environment:
       - FLASK_ENV=development
     networks:
@@ -21,20 +18,38 @@ services:
   frontend:
     build:
       context: . # Build from the root directory
-      dockerfile: Dockerfile.frontend # Use the new Dockerfile
-      network: host # <-- ADD THIS: Also speeds up frontend 'pnpm install'
+      dockerfile: Dockerfile.frontend
+      # Use host networking for faster 'pnpm install'
+      network: host
     container_name: token-counter-frontend
-    ports:
-      - "3000:3000" # Next.js runs on port 3000
-    dns:
-      - 8.8.8.8
-      - 1.1.1.1
+    # !!! PORTS REMOVED !!!
+    # Caddy will now handle all public traffic and forward it here.
     depends_on:
       - backend
     networks:
       - token-counter-network
     restart: unless-stopped
 
+  # --- ADD THIS NEW CADDY SERVICE ---
+  caddy:
+    image: caddy:latest
+    container_name: token-counter-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"   # For standard HTTP traffic (and SSL auto-redirect)
+      - "443:443" # For standard HTTPS traffic
+    volumes:
+      # Mount the Caddyfile you created into the container
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      # Create a named volume to store SSL certificates persistently
+      - caddy_data:/data
+    networks:
+      - token-counter-network
+
 networks:
   token-counter-network:
     driver: bridge
+
+# --- ADD THIS NAMED VOLUME ---
+volumes:
+  caddy_data:

@@ -9,16 +9,20 @@ const nextConfig = {
   images: {
     unoptimized: true,
   },
-  // ADD THIS BLOCK to proxy API requests
+
+  // --- ADD THIS PROXY CONFIGURATION ---
   async rewrites() {
     return [
+      // This rule will proxy requests like /api/count-tokens
       {
         source: '/api/:path*',
+        // to the backend container's /api/... endpoint
         destination: 'http://backend:5000/api/:path*',
       },
-      // This will match all other endpoints on your Flask app
+      // This rule will proxy all other specific API routes
       {
         source: '/:path(analyze|batch_tokenize|compare_tokenizers|health)',
+        // to the backend container's root endpoints
         destination: 'http://backend:5000/:path',
       },
     ]
