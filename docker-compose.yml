@@ -11,6 +11,7 @@ services:
     # No ports needed; Caddy and frontend will use the internal Docker network
     environment:
       - FLASK_ENV=development
+      - FLASK_RUN_HOST=0.0.0.0
     networks:
       - token-counter-network
     restart: unless-stopped
@@ -26,6 +27,10 @@ services:
     # Caddy will now handle all public traffic and forward it here.
     depends_on:
       - backend
+    environment:
+      - NODE_ENV=production
+      - BACKEND_URL=http://token-counter-backend:5000
+      - NEXT_PUBLIC_API_BASE_URL=
     networks:
       - token-counter-network
     restart: unless-stopped
