@@ -3,6 +3,7 @@ Flask backend for token analysis using tiktoken.
 """
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+import logging
 import re
 
 # tiktoken is optional at runtime; provide a fallback tokenizer when it's not available
@@ -16,8 +17,11 @@ import io
 import zipfile
 from werkzeug.utils import secure_filename
 
+MAX_CHAR_COUNT = 2_000_000  # ~2 MB of UTF-8 text, prevents tokenizer stack overflow
+
 app = Flask(__name__)
 CORS(app)
+logger = logging.getLogger(__name__)
 
 def get_word_count(text):
     """Simple word count implementation."""
@@ -53,7 +57,16 @@ def safe_encode(encoding, text, context='provided text'):
     try:
         return encoding.encode(text)
     except Exception as exc:
+        logger.warning("Tokenizer failed for %s: %s", context, exc)
         raise RuntimeError(f"Failed to tokenize {context}. The file might be too large or malformed.") from exc
+
+
+def validate_text_size(text, context='provided text'):
+    if len(text) > MAX_CHAR_COUNT:
+        raise ValueError(
+            f"{context} is too large ({len(text):,} characters). "
+            f"Please split the file into smaller parts (<= {MAX_CHAR_COUNT:,} chars) and try again."
+        )
 
 
 @app.route('/analyze', methods=['POST'])
@@ -76,6 +89,7 @@ def analyze():
         
         text = data['text']
         encoding_name = data.get('encoding', 'cl100k_base')
+        validate_text_size(text, context='request body')
         
         try:
             encoding = tiktoken.get_encoding(encoding_name)
@@ -92,6 +106,8 @@ def analyze():
             'tokens': tokens
         }), 200
     
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -118,8 +134,9 @@ def batch_tokenize():
             return jsonify({'error': f'Invalid encoding: {encoding_name}'}), 400
 
         results = []
-        for text in texts:
-            tokens = safe_encode(encoding, text, context='request body')
+        for idx, text in enumerate(texts, start=1):
+            validate_text_size(text, context=f'batch item #{idx}')
+            tokens = safe_encode(encoding, text, context=f'batch item #{idx}')
             results.append({
                 'token_count': len(tokens),
                 'word_count': get_word_count(text)
@@ -127,6 +144,8 @@ def batch_tokenize():
             
         return jsonify({'results': results}), 200
     
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -148,12 +167,12 @@ def compare_tokenizers():
         text = data['text']
         encodings = data['encodings']
         results = {}
+        validate_text_size(text, context='comparison request body')
 
         for encoding_name in encodings:
             try:
                 encoding = tiktoken.get_encoding(encoding_name)
-                tokens = safe_encode(encoding, text, context=f"{filename}/{member}")
-                tokens = safe_encode(encoding, text, context=filename)
+                tokens = safe_encode(encoding, text, context=f'comparison for {encoding_name}')
                 results[encoding_name] = len(tokens)
             except ValueError:
                 results[encoding_name] = "Invalid encoding"
@@ -162,6 +181,8 @@ def compare_tokenizers():
 
         return jsonify({'results': results}), 200
 
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -213,7 +234,8 @@ def count_tokens():
                                     text = f.read().decode('utf-8')
                                 except Exception:
                                     text = f.read().decode('latin-1', errors='replace')
-                                tokens = encoding.encode(text)
+                                validate_text_size(text, context=f"{filename}/{member}")
+                                tokens = safe_encode(encoding, text, context=f"{filename}/{member}")
                                 token_count = len(tokens)
                                 word_count = len(re.findall(r'\w+', text))
                                 char_count = len(text)
@@ -228,7 +250,8 @@ def count_tokens():
                 except Exception:
                     text = data.decode('latin-1', errors='replace')
 
-                tokens = encoding.encode(text)
+                validate_text_size(text, context=filename)
+                tokens = safe_encode(encoding, text, context=filename)
                 token_count = len(tokens)
                 word_count = len(re.findall(r'\w+', text))
                 char_count = len(text)
@@ -237,6 +260,8 @@ def count_tokens():
 
         return jsonify({'files': results, 'total_tokens': total_tokens}), 200
 
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
