@@ -4,8 +4,6 @@ import Link from 'next/link'
 import Image from 'next/image'
 import { usePathname } from 'next/navigation'
 import type { ReactNode } from 'react'
-import { ArrowRight } from 'lucide-react'
-
 import ThemeToggle from '@/app/components/ThemeToggle'
 import { AppStateProvider } from '@/app/providers/app-state'
 import { cn } from '@/lib/utils'
@@ -90,12 +88,6 @@ export function AppShell({ children }: AppShellProps) {
                   {item.description}
                 </span>
                 <span className="text-base font-semibold">{item.label}</span>
-                <ArrowRight
-                  className={cn(
-                    'absolute right-3 top-3 size-4 text-slate-300 transition-opacity group-hover:opacity-100',
-                    isActive(item.href) ? 'opacity-100 text-indigo-400' : 'opacity-0',
-                  )}
-                />
               </Link>
             ))}
           </nav>
