@@ -1,19 +1,10 @@
-'use client'
+"use client"
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { FileRejection } from 'react-dropzone'
 import { useDropzone } from 'react-dropzone'
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts'
 
-import { useAppState } from '@/app/providers/app-state'
+import { useAppState, type ProjectRun } from '@/app/providers/app-state'
 import { useToast } from '@/hooks/use-toast'
 import {
   analyzeText,
@@ -21,16 +12,22 @@ import {
   compareTokenizers,
   countTokensFromFiles,
   type CountTokensResponse,
-  type TokenFileStat,
 } from '@/lib/api/token-tools'
-import { cn } from '@/lib/utils'
-import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { UploadWorkbench } from '@/components/platform/UploadWorkbench'
+import { TokenSummaryPanel } from '@/components/platform/TokenSummaryPanel'
+import { KnowledgeBaseCard } from '@/components/platform/KnowledgeBaseCard'
+import { ProjectManager } from '@/components/platform/ProjectManager'
+import { ChatCalcTab } from '@/components/platform/ChatCalcTab'
+import { DiffToolTab } from '@/components/platform/DiffToolTab'
+import { CommandPalette } from '@/components/platform/CommandPalette'
+import { useHotkeys } from '@/hooks/use-hotkeys'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
 import { Textarea } from '@/components/ui/textarea'
 import { Input } from '@/components/ui/input'
+import { cn } from '@/lib/utils'
 
 const ACCEPTED_TYPES = {
   'text/plain': ['.txt', '.md'],
@@ -38,17 +35,7 @@ const ACCEPTED_TYPES = {
   'application/x-zip-compressed': ['.zip'],
 }
 
-const TXT_MAX_BYTES = 10 * 1024 * 1024
-const HISTORY_STORAGE_KEY = 'mtt_history_v3'
 const COMPARISON_ENCODINGS = ['cl100k_base', 'p50k_base', 'r50k_base', 'gpt2']
-
-type HistoryEntry = {
-  id: string
-  createdAt: string
-  tokenizer: string
-  totalTokens: number
-  files: TokenFileStat[]
-}
 
 type BatchRow = {
   fileName: string
@@ -66,13 +53,66 @@ const formatBytes = (bytes: number) => {
 const estimateCost = (tokens: number, ratePerMillion = 0.03) =>
   (tokens / 1_000_000) * ratePerMillion
 
-const createHistoryId = () =>
-  typeof crypto !== 'undefined' && 'randomUUID' in crypto
-    ? crypto.randomUUID()
-    : `run-${Date.now()}`
+const detectFileType = (name: string) => {
+  const ext = name.split('.').pop()?.toLowerCase()
+  if (!ext) return 'other'
+  if (['md', 'markdown'].includes(ext)) return 'markdown'
+  if (['js', 'ts', 'tsx', 'py', 'java', 'cs', 'go'].includes(ext)) return 'code'
+  if (['json', 'yaml', 'yml', 'csv'].includes(ext)) return 'data'
+  if (['zip'].includes(ext)) return 'archive'
+  return 'text'
+}
+
+const generateId = () => {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID()
+  return Math.random().toString(36).slice(2)
+}
+
+const preprocessText = (text: string, settings: ReturnType<typeof useAppState>['preprocess']) => {
+  let result = text
+  if (settings.stripHtml) {
+    result = result.replace(/<[^>]*>/g, ' ')
+  }
+  if (settings.redactEmails) {
+    result = result.replace(
+      /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi,
+      '[REDACTED_EMAIL]',
+    )
+  }
+  if (settings.normalizeWhitespace) {
+    result = result.replace(/\s+/g, ' ').trim()
+  }
+  return result
+}
+
+const preprocessFile = async (
+  file: File,
+  settings: ReturnType<typeof useAppState>['preprocess'],
+) => {
+  const lower = file.name.toLowerCase()
+  if (lower.endsWith('.zip')) return file
+  try {
+    const text = await file.text()
+    const processed = preprocessText(text, settings)
+    if (processed === text) return file
+    return new File([processed], file.name, { type: file.type || 'text/plain' })
+  } catch {
+    return file
+  }
+}
 
 export default function CoreToolPage() {
-  const { uploads, setUploads, tokenizer, setTokenizer } = useAppState()
+  const {
+    uploads,
+    setUploads,
+    tokenizer,
+    setTokenizer,
+    preprocess,
+    projects,
+    activeProjectId,
+    createProject,
+    addRunToProject,
+  } = useAppState()
   const { toast } = useToast()
 
   const [analysis, setAnalysis] = useState<CountTokensResponse | null>(null)
@@ -80,7 +120,6 @@ export default function CoreToolPage() {
   const [uploadProgress, setUploadProgress] = useState(0)
   const [controller, setController] = useState<AbortController | null>(null)
 
-  const [history, setHistory] = useState<HistoryEntry[]>([])
   const [compareFileName, setCompareFileName] = useState<string>('')
   const [compareResult, setCompareResult] = useState<Record<string, number | string> | null>(null)
   const [compareLoading, setCompareLoading] = useState(false)
@@ -100,34 +139,38 @@ export default function CoreToolPage() {
   const [chunks, setChunks] = useState<string[]>([])
   const [chunkLoading, setChunkLoading] = useState(false)
 
-  const [inputRate, setInputRate] = useState(0.03) // $0.03 per 1M tokens (GPT-4 Turbo input)
+  const [inputRate, setInputRate] = useState(0.03)
   const [outputRate, setOutputRate] = useState(0.06)
 
-  useEffect(() => {
-    if (uploads.length && !compareFileName) {
-      setCompareFileName(uploads[0].name)
-    }
-    if (uploads.length && !chunkFileName) {
-      setChunkFileName(uploads[0].name)
-    }
-  }, [uploads, compareFileName, chunkFileName])
+  const [selectedTab, setSelectedTab] = useState('overview')
+  const [commandOpen, setCommandOpen] = useState(false)
+  const [selectedModel, setSelectedModel] = useState('')
+  const [visualizerFile, setVisualizerFile] = useState('')
+  const [visualizerText, setVisualizerText] = useState('')
 
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    try {
-      const saved = localStorage.getItem(HISTORY_STORAGE_KEY)
-      if (saved) {
-        setHistory(JSON.parse(saved))
+  const ensureProjectId = useCallback(() => {
+    if (activeProjectId) return activeProjectId
+    return createProject(`Project ${projects.length + 1}`)
+  }, [activeProjectId, createProject, projects.length])
+
+  const saveRunToProject = useCallback(
+    (payload: CountTokensResponse) => {
+      const projectId = ensureProjectId()
+      const summary = payload.files
+        .slice(0, 3)
+        .map((file) => `${file.name}: ${file.token_count.toLocaleString()} tokens`)
+        .join(', ')
+      const run: ProjectRun = {
+        id: generateId(),
+        createdAt: new Date().toISOString(),
+        summary,
+        totalTokens: payload.total_tokens,
+        tokenizer,
       }
-    } catch {
-      setHistory([])
-    }
-  }, [])
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(history))
-  }, [history])
+      addRunToProject(projectId, run)
+    },
+    [addRunToProject, ensureProjectId, tokenizer],
+  )
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     accept: ACCEPTED_TYPES,
@@ -159,14 +202,6 @@ export default function CoreToolPage() {
           })
           return
         }
-        if (isTxtLike && file.size > TXT_MAX_BYTES) {
-          toast({
-            title: 'File too large',
-            description: `${file.name} exceeds the ${formatBytes(TXT_MAX_BYTES)} limit for text files.`,
-            variant: 'destructive',
-          })
-          return
-        }
         valid.push(file)
       })
 
@@ -182,8 +217,7 @@ export default function CoreToolPage() {
   )
 
   const handleRemoveFile = (index: number) => {
-    const next = uploads.filter((_, idx) => idx !== index)
-    setUploads(next)
+    setUploads(uploads.filter((_, idx) => idx !== index))
   }
 
   const handleClearQueue = () => {
@@ -191,23 +225,10 @@ export default function CoreToolPage() {
     setAnalysis(null)
     setCompareResult(null)
     setBatchRows([])
+    setChunks([])
   }
 
-  const pushHistory = useCallback(
-    (payload: CountTokensResponse) => {
-      const entry: HistoryEntry = {
-        id: createHistoryId(),
-        createdAt: new Date().toISOString(),
-        tokenizer,
-        totalTokens: payload.total_tokens,
-        files: payload.files,
-      }
-      setHistory((prev) => [entry, ...prev].slice(0, 25))
-    },
-    [tokenizer],
-  )
-
-  const handleAnalyze = async () => {
+  const handleAnalyze = useCallback(async () => {
     if (!uploads.length) {
       toast({
         title: 'No files queued',
@@ -224,14 +245,17 @@ export default function CoreToolPage() {
     setAnalysis(null)
 
     try {
+      const processedFiles = await Promise.all(
+        uploads.map((file) => preprocessFile(file, preprocess)),
+      )
       const result = await countTokensFromFiles({
-        files: uploads,
+        files: processedFiles,
         encoding: tokenizer,
         onProgress: setUploadProgress,
         signal: abortController.signal,
       })
       setAnalysis(result)
-      pushHistory(result)
+      saveRunToProject(result)
       toast({
         title: 'Analysis complete',
         description: `${result.total_tokens.toLocaleString()} tokens processed.`,
@@ -255,7 +279,7 @@ export default function CoreToolPage() {
       setUploadProgress(0)
       setController(null)
     }
-  }
+  }, [uploads, preprocess, tokenizer, toast, saveRunToProject])
 
   const handleCompare = async () => {
     if (!compareFileName) {
@@ -278,7 +302,8 @@ export default function CoreToolPage() {
 
     setCompareLoading(true)
     try {
-      const text = await file.text()
+      const processed = await preprocessFile(file, preprocess)
+      const text = await processed.text()
       const response = await compareTokenizers(text, COMPARISON_ENCODINGS)
       setCompareResult(response.results)
       toast({ title: 'Comparison ready', description: 'Token counts by encoding generated.' })
@@ -307,7 +332,12 @@ export default function CoreToolPage() {
     setBatchRows(uploads.map((file) => ({ fileName: file.name, status: 'Pending' })))
 
     try {
-      const texts = await Promise.all(uploads.map((file) => file.text()))
+      const texts = await Promise.all(
+        uploads.map(async (file) => {
+          const processed = await preprocessFile(file, preprocess)
+          return processed.text()
+        }),
+      )
       const response = await batchTokenize(texts, tokenizer)
       const rows = uploads.map((file, index) => ({
         fileName: file.name,
@@ -387,7 +417,8 @@ export default function CoreToolPage() {
 
     setChunkLoading(true)
     try {
-      const text = await file.text()
+      const processed = await preprocessFile(file, preprocess)
+      const text = await processed.text()
       const words = text.split(/\s+/).filter(Boolean)
       const slices: string[] = []
       const step = Math.max(chunkSize - chunkOverlap, 1)
@@ -428,604 +459,485 @@ export default function CoreToolPage() {
     }
   }
 
-  const handleClearHistory = () => {
-    setHistory([])
-    toast({ title: 'History cleared', description: 'Local analysis history removed.' })
-  }
-
   const totalBytes = useMemo(
     () => uploads.reduce((sum, file) => sum + file.size, 0),
     [uploads],
   )
 
+  useEffect(() => {
+    if (!uploads.length) {
+      setVisualizerFile('')
+      setVisualizerText('')
+      return
+    }
+    if (!visualizerFile || !uploads.some((file) => file.name === visualizerFile)) {
+      setVisualizerFile(uploads[0].name)
+    }
+  }, [uploads, visualizerFile])
+
+  useEffect(() => {
+    let cancelled = false
+    const load = async () => {
+      if (!visualizerFile) {
+        setVisualizerText('')
+        return
+      }
+      const file = uploads.find((f) => f.name === visualizerFile)
+      if (!file) return
+      const processed = await preprocessFile(file, preprocess)
+      const text = await processed.text()
+      if (!cancelled) setVisualizerText(text)
+    }
+    load()
+    return () => {
+      cancelled = true
+    }
+  }, [visualizerFile, uploads, preprocess])
+
+  const fileTypeData = useMemo(() => {
+    if (!analysis) return []
+    const map = new Map<string, number>()
+    analysis.files.forEach((file) => {
+      const type = detectFileType(file.name)
+      map.set(type, (map.get(type) ?? 0) + 1)
+    })
+    return Array.from(map.entries()).map(([type, value]) => ({ type, value }))
+  }, [analysis])
+
+  const visualizerOptions = uploads.map((file) => file.name)
+
+  useEffect(() => {
+    if (uploads.length && !compareFileName) {
+      setCompareFileName(uploads[0].name)
+    }
+    if (uploads.length && !chunkFileName) {
+      setChunkFileName(uploads[0].name)
+    }
+  }, [uploads, compareFileName, chunkFileName])
+
+  const commandOptions = [
+    { value: 'overview', label: 'Overview' },
+    { value: 'compare', label: 'Compare' },
+    { value: 'batch', label: 'Batch' },
+    { value: 'pricing', label: 'Pricing' },
+    { value: 'api', label: 'API playground' },
+    { value: 'chunking', label: 'Chunking' },
+    { value: 'chat', label: 'Chat Calc' },
+    { value: 'diff', label: 'Diff Tool' },
+    { value: 'projects', label: 'Projects' },
+  ]
+
+  useHotkeys([
+    { combo: 'meta+enter', handler: handleAnalyze },
+    { combo: 'ctrl+enter', handler: handleAnalyze },
+    { combo: 'meta+k', handler: () => setCommandOpen(true) },
+    { combo: 'ctrl+k', handler: () => setCommandOpen(true) },
+  ])
+
   return (
-    <section className="space-y-10">
-      <header className="space-y-3">
-        <p className="text-sm uppercase tracking-[0.3em] text-indigo-500">Core Tool Interface</p>
-        <h1 className="text-4xl font-semibold tracking-tight text-slate-900 dark:text-slate-50">
-          Upload, tokenize, compare, and document — all in one workspace.
-        </h1>
-        <p className="max-w-3xl text-lg text-slate-600 dark:text-slate-300">
-          This page wraps the entire pipeline: drag files into the queue, kick off token counts, and
-          explore supporting tools for pricing, API testing, and documentation.
-        </p>
-      </header>
+    <>
+      <section className="space-y-10">
+        <header className="space-y-3">
+          <p className="text-sm uppercase tracking-[0.3em] text-indigo-500">Core Tool Interface</p>
+          <h1 className="text-4xl font-semibold tracking-tight text-slate-900 dark:text-slate-50">
+            Upload, tokenize, compare, and document — all in one workspace.
+          </h1>
+          <p className="max-w-3xl text-lg text-slate-600 dark:text-slate-300">
+            This page powers project workspaces, advanced charts, and reporting-grade exports for your
+            token analysis.
+          </p>
+        </header>
 
-      <div className="grid gap-6 lg:grid-cols-[2fr,1fr]">
-        <Card
-          {...getRootProps()}
-          className={cn(
-            'cursor-pointer border-dashed px-8 py-10 text-center transition-colors dark:bg-slate-900/50 dark:border-slate-800 dark:hover:border-indigo-500/60 dark:hover:bg-indigo-500/5',
-            isDragActive
-              ? 'border-indigo-500 bg-indigo-50/60 dark:bg-indigo-500/20'
-              : 'border-slate-200 bg-white/70',
-          )}
-        >
-          <input {...getInputProps()} />
-          <CardHeader>
-            <CardTitle>Drop files anywhere in this surface</CardTitle>
-            <CardDescription>.txt · .md · .zip (nested text extraction supported)</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <p className="text-sm text-slate-500">
-              Tip: ZIP uploads keep folder context in the final report. Plain text files have a{' '}
-              {formatBytes(TXT_MAX_BYTES)} limit for stability.
-            </p>
-            <div className="grid gap-3">
-              <Skeleton className="h-3 rounded-full bg-slate-200 dark:bg-slate-800" />
-              <Skeleton className="h-3 rounded-full bg-slate-200 dark:bg-slate-800" />
-              <Skeleton className="h-3 rounded-full bg-slate-200 dark:bg-slate-800" />
-            </div>
-          </CardContent>
-        </Card>
+        <UploadWorkbench
+          getRootProps={getRootProps}
+          getInputProps={getInputProps}
+          isDragActive={isDragActive}
+          uploads={uploads}
+          totalBytes={formatBytes(totalBytes)}
+          tokenizer={tokenizer}
+          onTokenizerChange={setTokenizer}
+          onRemoveFile={handleRemoveFile}
+          onClearQueue={handleClearQueue}
+          onAnalyze={handleAnalyze}
+          onCancel={() => controller?.abort()}
+          isAnalyzing={isAnalyzing}
+          uploadProgress={uploadProgress}
+        />
 
-        <div className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>Upload queue</CardTitle>
-              <CardDescription>
-                {uploads.length
-                  ? `${uploads.length} file${uploads.length > 1 ? 's' : ''} · ${formatBytes(totalBytes)}`
-                  : 'No files yet — drop something in the panel to the left.'}
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {uploads.length === 0 && (
-                <p className="text-sm text-slate-500">Your files will appear here with metadata.</p>
-              )}
-              {uploads.map((file, index) => (
-                <div
-                  key={`${file.name}-${index}`}
-                  className="flex items-center justify-between rounded-2xl border border-slate-200 px-4 py-3 text-sm dark:border-slate-800"
-                >
-                  <div>
-                    <p className="font-medium text-slate-800 dark:text-slate-100">{file.name}</p>
-                    <p className="text-xs text-slate-500">
-                      {formatBytes(file.size)} · {file.type || 'text/plain'}
-                    </p>
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      handleRemoveFile(index)
-                    }}
+        <div className="grid gap-6 lg:grid-cols-[3fr,1fr]">
+          <TokenSummaryPanel
+            analysis={analysis}
+            onCopy={handleCopySummary}
+            visualizerText={visualizerText}
+            visualizerSelection={visualizerFile}
+            visualizerOptions={visualizerOptions}
+            onVisualizerChange={setVisualizerFile}
+            fileTypeData={fileTypeData}
+            onModelFocus={setSelectedModel}
+          />
+          <KnowledgeBaseCard selectedModel={selectedModel} />
+        </div>
+
+        <Tabs value={selectedTab} onValueChange={setSelectedTab}>
+          <TabsList className="flex-wrap">
+            <TabsTrigger value="overview">Overview</TabsTrigger>
+            <TabsTrigger value="compare">Compare</TabsTrigger>
+            <TabsTrigger value="batch">Batch</TabsTrigger>
+            <TabsTrigger value="pricing">Pricing</TabsTrigger>
+            <TabsTrigger value="api">API</TabsTrigger>
+            <TabsTrigger value="chunking">Chunking</TabsTrigger>
+            <TabsTrigger value="chat">Chat Calc</TabsTrigger>
+            <TabsTrigger value="diff">Diff</TabsTrigger>
+            <TabsTrigger value="projects">Projects</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="compare">
+            <Card className="mt-4">
+              <CardHeader className="space-y-4 lg:flex lg:flex-row lg:items-center lg:justify-between">
+                <div>
+                  <CardTitle>Tokenizer comparison</CardTitle>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">
+                    Run the same text through {COMPARISON_ENCODINGS.length} encodings.
+                  </p>
+                </div>
+                <div className="flex items-center gap-3">
+                  <select
+                    value={compareFileName}
+                    onChange={(event) => setCompareFileName(event.target.value)}
+                    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm dark:border-slate-800 dark:bg-slate-900"
                   >
-                    Remove
+                    <option value="">Select file</option>
+                    {uploads.map((file) => (
+                      <option key={file.name} value={file.name}>
+                        {file.name}
+                      </option>
+                    ))}
+                  </select>
+                  <Button onClick={handleCompare} disabled={!uploads.length || compareLoading}>
+                    {compareLoading ? (
+                      <>
+                        <Spinner className="mr-2" /> Comparing…
+                      </>
+                    ) : (
+                      'Compare'
+                    )}
                   </Button>
                 </div>
-              ))}
-            </CardContent>
-          </Card>
+              </CardHeader>
+              <CardContent>
+                {!compareResult && (
+                  <p className="text-sm text-slate-500">
+                    Select a file from your queue to see how each tokenizer interprets it.
+                  </p>
+                )}
+                {compareResult && (
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-slate-200 dark:border-slate-800">
+                          <th className="px-4 py-2 text-left">Encoding</th>
+                          <th className="px-4 py-2 text-right">Token count</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {Object.entries(compareResult).map(([encoding, count]) => (
+                          <tr key={encoding} className="border-b border-slate-100 dark:border-slate-800/60">
+                            <td className="px-4 py-2 font-mono">{encoding}</td>
+                            <td className="px-4 py-2 text-right">
+                              {typeof count === 'number' ? count.toLocaleString() : count}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
 
-          <Card>
-            <CardHeader>
-              <CardTitle>Controls</CardTitle>
-              <CardDescription>Pick an encoding and run the tokenizer pipeline.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <label className="text-xs uppercase tracking-wide text-slate-500">
-                  Encoding / tokenizer
-                </label>
-                <select
-                  value={tokenizer}
-                  onChange={(event) => setTokenizer(event.target.value)}
-                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-500 dark:border-slate-800 dark:bg-slate-900"
-                >
-                  <option value="cl100k_base">cl100k_base (GPT-4 & GPT-3.5)</option>
-                  <option value="p50k_base">p50k_base (Codex)</option>
-                  <option value="r50k_base">r50k_base (GPT-3)</option>
-                  <option value="gpt2">gpt2 (legacy)</option>
-                </select>
-              </div>
-              <div className="flex flex-wrap gap-3">
-                <Button onClick={handleAnalyze} disabled={!uploads.length || isAnalyzing}>
-                  {isAnalyzing ? (
+          <TabsContent value="batch">
+            <Card className="mt-4">
+              <CardHeader className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                <div>
+                  <CardTitle>Batch tokenization</CardTitle>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">
+                    Send all queued files to /batch_tokenize for quick stats.
+                  </p>
+                </div>
+                <Button onClick={handleBatch} disabled={!uploads.length || batchLoading}>
+                  {batchLoading ? (
+                    <>
+                      <Spinner className="mr-2" /> Processing…
+                    </>
+                  ) : (
+                    `Process ${uploads.length || 0} file${uploads.length === 1 ? '' : 's'}`
+                  )}
+                </Button>
+              </CardHeader>
+              <CardContent>
+                {!uploads.length && (
+                  <p className="text-sm text-slate-500">Upload files to enable the batch process.</p>
+                )}
+                {!!uploads.length && (
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-slate-200 dark:border-slate-800">
+                          <th className="px-4 py-2 text-left">Filename</th>
+                          <th className="px-4 py-2 text-left">Status</th>
+                          <th className="px-4 py-2 text-right">Tokens</th>
+                          <th className="px-4 py-2 text-right">Words</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {batchRows.map((row) => (
+                          <tr key={row.fileName} className="border-b border-slate-100 dark:border-slate-800/60">
+                            <td className="px-4 py-2">{row.fileName}</td>
+                            <td className="px-4 py-2">
+                              <span
+                                className={cn(
+                                  'rounded-full px-2 py-1 text-xs font-medium',
+                                  row.status === 'Done'
+                                    ? 'bg-emerald-100 text-emerald-700'
+                                    : row.status === 'Error'
+                                      ? 'bg-rose-100 text-rose-700'
+                                      : 'bg-slate-100 text-slate-500',
+                                )}
+                              >
+                                {row.status}
+                              </span>
+                            </td>
+                            <td className="px-4 py-2 text-right">
+                              {row.token_count ? row.token_count.toLocaleString() : '—'}
+                            </td>
+                            <td className="px-4 py-2 text-right">
+                              {row.word_count ? row.word_count.toLocaleString() : '—'}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="pricing">
+            <Card className="mt-4">
+              <CardHeader>
+                <CardTitle>Pricing estimator</CardTitle>
+                <p className="text-sm text-slate-500 dark:text-slate-400">
+                  Combine the latest analysis with current GPT input/output rates.
+                </p>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div>
+                    <label className="text-xs uppercase tracking-wide text-slate-500">
+                      Input cost ($ / 1M tokens)
+                    </label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      value={inputRate}
+                      onChange={(event) => setInputRate(parseFloat(event.target.value) || 0)}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs uppercase tracking-wide text-slate-500">
+                      Output cost ($ / 1M tokens)
+                    </label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      value={outputRate}
+                      onChange={(event) => setOutputRate(parseFloat(event.target.value) || 0)}
+                    />
+                  </div>
+                </div>
+                {!analysis && (
+                  <p className="text-sm text-slate-500">
+                    Run an analysis to feed real token counts into this estimator.
+                  </p>
+                )}
+                {analysis && (
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/40">
+                      <p className="text-xs uppercase tracking-wide text-slate-500">Input cost</p>
+                      <p className="text-2xl font-semibold text-indigo-600 dark:text-indigo-300">
+                        ${estimateCost(analysis.total_tokens, inputRate).toFixed(4)}
+                      </p>
+                    </div>
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/40">
+                      <p className="text-xs uppercase tracking-wide text-slate-500">Output cost</p>
+                      <p className="text-2xl font-semibold text-indigo-600 dark:text-indigo-300">
+                        ${estimateCost(analysis.total_tokens, outputRate).toFixed(4)}
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="api">
+            <Card className="mt-4">
+              <CardHeader className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                <div>
+                  <CardTitle>API playground</CardTitle>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">
+                    POST /analyze with any ad-hoc text snippet.
+                  </p>
+                </div>
+                <Button onClick={handleApiCall} disabled={apiLoading}>
+                  {apiLoading ? (
                     <>
                       <Spinner className="mr-2" />
-                      Analyzing…
+                      Tokenizing…
                     </>
                   ) : (
-                    'Analyze Files'
+                    'Tokenize text'
                   )}
                 </Button>
-                {isAnalyzing && controller && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => controller.abort()}
-                    disabled={!isAnalyzing}
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <Textarea rows={6} value={apiText} onChange={(event) => setApiText(event.target.value)} />
+                {apiResponse && (
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 text-sm dark:border-slate-800 dark:bg-slate-900/40">
+                    <p className="font-semibold text-slate-800 dark:text-slate-100">JSON Response</p>
+                    <pre className="mt-2 overflow-x-auto text-xs text-slate-600 dark:text-slate-300">
+                      {JSON.stringify(apiResponse, null, 2)}
+                    </pre>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="chunking">
+            <Card className="mt-4">
+              <CardHeader className="flex flex-col gap-3 lg:flex-row lg: items-center lg:justify-between">
+                <div>
+                  <CardTitle>Chunking simulator</CardTitle>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">
+                    Visualize chunk boundaries before sending content to a vector database.
+                  </p>
+                </div>
+                <div className="flex items-center gap-3">
+                  <select
+                    value={chunkFileName}
+                    onChange={(event) => setChunkFileName(event.target.value)}
+                    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm dark:border-slate-800 dark:bg-slate-900"
                   >
-                    Cancel
-                  </Button>
-                )}
-                <Button type="button" variant="ghost" onClick={handleClearQueue} disabled={!uploads.length}>
-                  Clear Queue
-                </Button>
-              </div>
-              {isAnalyzing && (
-                <div className="h-2 rounded-full bg-slate-200 dark:bg-slate-800">
-                  <div
-                    className="h-full rounded-full bg-indigo-500 transition-all"
-                    style={{ width: `${uploadProgress}%` }}
-                  />
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-      </div>
-
-      <Card>
-        <CardHeader className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <CardTitle>Latest analysis</CardTitle>
-            <CardDescription>
-              Totals and per-file stats populate after each run. Copy the summary for quick documentation.
-            </CardDescription>
-          </div>
-          <Button variant="outline" onClick={handleCopySummary} disabled={!analysis}>
-            Copy summary
-          </Button>
-        </CardHeader>
-        <CardContent>
-          {!analysis && (
-            <p className="text-sm text-slate-500">
-              Run an analysis to populate this section with token counts, cost estimates, and charts.
-            </p>
-          )}
-          {analysis && (
-            <div className="space-y-6">
-              <div className="grid gap-4 md:grid-cols-2">
-                <div className="rounded-2xl border border-slate-200 bg-slate-50/60 p-5 dark:border-slate-800 dark:bg-slate-900/40">
-                  <p className="text-xs uppercase tracking-wide text-slate-500">Total tokens</p>
-                  <p className="text-3xl font-semibold text-slate-900 dark:text-white">
-                    {analysis.total_tokens.toLocaleString()}
-                  </p>
-                </div>
-                <div className="rounded-2xl border border-slate-200 bg-slate-50/60 p-5 dark:border-slate-800 dark:bg-slate-900/40">
-                  <p className="text-xs uppercase tracking-wide text-slate-500">Estimated GPT-4 input cost</p>
-                  <p className="text-3xl font-semibold text-emerald-600 dark:text-emerald-300">
-                    ${estimateCost(analysis.total_tokens).toFixed(4)}
-                  </p>
-                </div>
-              </div>
-              <div className="grid gap-6 lg:grid-cols-2">
-                <div className="h-64 rounded-2xl border border-slate-200 p-4 dark:border-slate-800">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={analysis.files} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                      <XAxis dataKey="name" hide />
-                      <YAxis />
-                      <Tooltip />
-                      <Bar dataKey="token_count" fill="#6366F1" radius={[8, 8, 0, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-                <div className="overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-800">
-                  <table className="min-w-full text-sm">
-                    <thead className="bg-slate-50 dark:bg-slate-900/40">
-                      <tr>
-                        <th className="px-4 py-2 text-left">Filename</th>
-                        <th className="px-4 py-2 text-right">Tokens</th>
-                        <th className="px-4 py-2 text-right">Words</th>
-                        <th className="px-4 py-2 text-right">Chars</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {analysis.files.map((file) => (
-                        <tr key={file.name} className="border-t border-slate-100 dark:border-slate-800/60">
-                          <td className="px-4 py-2">{file.name}</td>
-                          <td className="px-4 py-2 text-right font-mono">{file.token_count.toLocaleString()}</td>
-                          <td className="px-4 py-2 text-right text-slate-500">{file.words.toLocaleString()}</td>
-                          <td className="px-4 py-2 text-right text-slate-500">{file.chars.toLocaleString()}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      <Tabs defaultValue="overview">
-        <TabsList>
-          <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="compare">Compare</TabsTrigger>
-          <TabsTrigger value="batch">Batch</TabsTrigger>
-          <TabsTrigger value="pricing">Pricing</TabsTrigger>
-          <TabsTrigger value="api">API</TabsTrigger>
-          <TabsTrigger value="chunking">Chunking</TabsTrigger>
-          <TabsTrigger value="history">History</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="overview">
-          {!analysis && (
-            <p className="mt-4 text-sm text-slate-500">
-              Run an analysis to populate the overview charts and table above.
-            </p>
-          )}
-          {analysis && (
-            <p className="mt-4 text-sm text-slate-500">
-              Overview data is already visualized above — use other tabs for specialized tools.
-            </p>
-          )}
-        </TabsContent>
-
-        <TabsContent value="compare">
-          <Card className="mt-4">
-            <CardHeader className="space-y-4 lg:flex lg:flex-row lg:items-center lg:justify-between">
-              <div>
-                <CardTitle>Tokenizer comparison</CardTitle>
-                <CardDescription>
-                  Run the same text through {COMPARISON_ENCODINGS.length} encodings to show drift.
-                </CardDescription>
-              </div>
-              <div className="flex items-center gap-3">
-                <select
-                  value={compareFileName}
-                  onChange={(event) => setCompareFileName(event.target.value)}
-                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm dark:border-slate-800 dark:bg-slate-900"
-                >
-                  <option value="">Select file</option>
-                  {uploads.map((file) => (
-                    <option key={file.name} value={file.name}>
-                      {file.name}
-                    </option>
-                  ))}
-                </select>
-                <Button onClick={handleCompare} disabled={!uploads.length || compareLoading}>
-                  {compareLoading ? (
-                    <>
-                      <Spinner className="mr-2" /> Comparing…
-                    </>
-                  ) : (
-                    'Compare'
-                  )}
-                </Button>
-              </div>
-            </CardHeader>
-            <CardContent>
-              {!compareResult && (
-                <p className="text-sm text-slate-500">
-                  Select a file from your queue to see how each tokenizer interprets it.
-                </p>
-              )}
-              {compareResult && (
-                <div className="overflow-x-auto">
-                  <table className="min-w-full text-sm">
-                    <thead>
-                      <tr className="border-b border-slate-200 dark:border-slate-800">
-                        <th className="px-4 py-2 text-left">Encoding</th>
-                        <th className="px-4 py-2 text-right">Token count</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {Object.entries(compareResult).map(([encoding, count]) => (
-                        <tr key={encoding} className="border-b border-slate-100 dark:border-slate-800/60">
-                          <td className="px-4 py-2 font-mono">{encoding}</td>
-                          <td className="px-4 py-2 text-right">
-                            {typeof count === 'number' ? count.toLocaleString() : count}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        <TabsContent value="batch">
-          <Card className="mt-4">
-            <CardHeader className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-              <div>
-                <CardTitle>Batch tokenization</CardTitle>
-                <CardDescription>Send all queued files to /batch_tokenize for quick stats.</CardDescription>
-              </div>
-              <Button onClick={handleBatch} disabled={!uploads.length || batchLoading}>
-                {batchLoading ? (
-                  <>
-                    <Spinner className="mr-2" /> Processing…
-                  </>
-                ) : (
-                  `Process ${uploads.length || 0} file${uploads.length === 1 ? '' : 's'}`
-                )}
-              </Button>
-            </CardHeader>
-            <CardContent>
-              {!uploads.length && (
-                <p className="text-sm text-slate-500">Upload files to enable the batch process.</p>
-              )}
-              {!!uploads.length && (
-                <div className="overflow-x-auto">
-                  <table className="min-w-full text-sm">
-                    <thead>
-                      <tr className="border-b border-slate-200 dark:border-slate-800">
-                        <th className="px-4 py-2 text-left">Filename</th>
-                        <th className="px-4 py-2 text-left">Status</th>
-                        <th className="px-4 py-2 text-right">Tokens</th>
-                        <th className="px-4 py-2 text-right">Words</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {batchRows.map((row) => (
-                        <tr key={row.fileName} className="border-b border-slate-100 dark:border-slate-800/60">
-                          <td className="px-4 py-2">{row.fileName}</td>
-                          <td className="px-4 py-2">
-                            <span
-                              className={cn(
-                                'rounded-full px-2 py-1 text-xs font-medium',
-                                row.status === 'Done'
-                                  ? 'bg-emerald-100 text-emerald-700'
-                                  : row.status === 'Error'
-                                    ? 'bg-rose-100 text-rose-700'
-                                    : 'bg-slate-100 text-slate-500',
-                              )}
-                            >
-                              {row.status}
-                            </span>
-                          </td>
-                          <td className="px-4 py-2 text-right">
-                            {row.token_count ? row.token_count.toLocaleString() : '—'}
-                          </td>
-                          <td className="px-4 py-2 text-right">
-                            {row.word_count ? row.word_count.toLocaleString() : '—'}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        <TabsContent value="pricing">
-          <Card className="mt-4">
-            <CardHeader>
-              <CardTitle>Pricing estimator</CardTitle>
-              <CardDescription>
-                Combine the latest analysis with current GPT input/output rates.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <div className="grid gap-4 md:grid-cols-2">
-                <div>
-                  <label className="text-xs uppercase tracking-wide text-slate-500">
-                    Input cost ($ / 1M tokens)
-                  </label>
-                  <Input
-                    type="number"
-                    step="0.01"
-                    value={inputRate}
-                    onChange={(event) => setInputRate(parseFloat(event.target.value) || 0)}
-                  />
-                </div>
-                <div>
-                  <label className="text-xs uppercase tracking-wide text-slate-500">
-                    Output cost ($ / 1M tokens)
-                  </label>
-                  <Input
-                    type="number"
-                    step="0.01"
-                    value={outputRate}
-                    onChange={(event) => setOutputRate(parseFloat(event.target.value) || 0)}
-                  />
-                </div>
-              </div>
-              {!analysis && (
-                <p className="text-sm text-slate-500">
-                  Run an analysis to feed real token counts into this estimator.
-                </p>
-              )}
-              {analysis && (
-                <div className="grid gap-4 md:grid-cols-2">
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/40">
-                    <p className="text-xs uppercase tracking-wide text-slate-500">Input cost</p>
-                    <p className="text-2xl font-semibold text-indigo-600 dark:text-indigo-300">
-                      ${estimateCost(analysis.total_tokens, inputRate).toFixed(4)}
-                    </p>
-                  </div>
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/40">
-                    <p className="text-xs uppercase tracking-wide text-slate-500">Output cost</p>
-                    <p className="text-2xl font-semibold text-indigo-600 dark:text-indigo-300">
-                      ${estimateCost(analysis.total_tokens, outputRate).toFixed(4)}
-                    </p>
-                  </div>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        <TabsContent value="api">
-          <Card className="mt-4">
-            <CardHeader className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-              <div>
-                <CardTitle>API playground</CardTitle>
-                <CardDescription>POST /analyze with any ad-hoc text snippet.</CardDescription>
-              </div>
-              <Button onClick={handleApiCall} disabled={apiLoading}>
-                {apiLoading ? (
-                  <>
-                    <Spinner className="mr-2" />
-                    Tokenizing…
-                  </>
-                ) : (
-                  'Tokenize text'
-                )}
-              </Button>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <Textarea rows={6} value={apiText} onChange={(event) => setApiText(event.target.value)} />
-              {apiResponse && (
-                <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 text-sm dark:border-slate-800 dark:bg-slate-900/40">
-                  <p className="font-semibold text-slate-800 dark:text-slate-100">JSON Response</p>
-                  <pre className="mt-2 overflow-x-auto text-xs text-slate-600 dark:text-slate-300">
-                    {JSON.stringify(apiResponse, null, 2)}
-                  </pre>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        <TabsContent value="chunking">
-          <Card className="mt-4">
-            <CardHeader className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-              <div>
-                <CardTitle>Chunking simulator</CardTitle>
-                <CardDescription>
-                  Visualize chunk boundaries before sending content to a vector database.
-                </CardDescription>
-              </div>
-              <div className="flex items-center gap-3">
-                <select
-                  value={chunkFileName}
-                  onChange={(event) => setChunkFileName(event.target.value)}
-                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm dark:border-slate-800 dark:bg-slate-900"
-                >
-                  <option value="">Select file</option>
-                  {uploads.map((file) => (
-                    <option key={file.name} value={file.name}>
-                      {file.name}
-                    </option>
-                  ))}
-                </select>
-                <Button onClick={handleGenerateChunks} disabled={!uploads.length || chunkLoading}>
-                  {chunkLoading ? (
-                    <>
-                      <Spinner className="mr-2" /> Generating…
-                    </>
-                  ) : (
-                    'Generate chunks'
-                  )}
-                </Button>
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid gap-4 md:grid-cols-2">
-                <div>
-                  <label className="text-xs uppercase tracking-wide text-slate-500">
-                    Chunk size (words)
-                  </label>
-                  <Input
-                    type="number"
-                    min={10}
-                    value={chunkSize}
-                    onChange={(event) => setChunkSize(Number(event.target.value))}
-                  />
-                </div>
-                <div>
-                  <label className="text-xs uppercase tracking-wide text-slate-500">
-                    Overlap (words)
-                  </label>
-                  <Input
-                    type="number"
-                    min={0}
-                    value={chunkOverlap}
-                    onChange={(event) => setChunkOverlap(Number(event.target.value))}
-                  />
-                </div>
-              </div>
-              {!chunks.length && (
-                <p className="text-sm text-slate-500">
-                  Generate chunks to preview the sliding window results.
-                </p>
-              )}
-              <div className="grid gap-4 max-h-[400px] overflow-y-auto pr-4">
-                {chunks.map((chunk, index) => (
-                  <div
-                    key={`${index}-${chunk.slice(0, 10)}`}
-                    className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-900/40 dark:text-slate-300"
-                  >
-                    <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-indigo-500">
-                      Chunk {index + 1}
-                    </p>
-                    {chunk}
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        <TabsContent value="history">
-          <Card className="mt-4">
-            <CardHeader className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-              <div>
-                <CardTitle>Analysis history</CardTitle>
-                <CardDescription>Last 25 runs are stored locally for quick recall.</CardDescription>
-              </div>
-              <Button variant="outline" onClick={handleClearHistory} disabled={!history.length}>
-                Clear history
-              </Button>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {!history.length && (
-                <p className="text-sm text-slate-500">
-                  Run an analysis to capture history in this timeline.
-                </p>
-              )}
-              {history.map((entry) => (
-                <div
-                  key={entry.id}
-                  className="rounded-2xl border border-slate-200 bg-white/70 p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900/40"
-                >
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <p className="text-sm font-semibold text-slate-900 dark:text-white">
-                      {new Date(entry.createdAt).toLocaleString()}
-                    </p>
-                    <span className="rounded-full bg-indigo-100 px-2 py-1 text-xs text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-200">
-                      {entry.tokenizer}
-                    </span>
-                  </div>
-                  <p className="text-xs uppercase tracking-wide text-slate-500">
-                    {entry.files.length} file{entry.files.length === 1 ? '' : 's'} ·{' '}
-                    {entry.totalTokens.toLocaleString()} tokens
-                  </p>
-                  <div className="mt-2 grid gap-1 text-xs text-slate-500">
-                    {entry.files.slice(0, 3).map((file) => (
-                      <p key={file.name}>
-                        {file.name}: {file.token_count.toLocaleString()} tokens
-                      </p>
+                    <option value="">Select file</option>
+                    {uploads.map((file) => (
+                      <option key={file.name} value={file.name}>
+                        {file.name}
+                      </option>
                     ))}
-                    {entry.files.length > 3 && <p>+{entry.files.length - 3} more…</p>}
+                  </select>
+                  <Button onClick={handleGenerateChunks} disabled={!uploads.length || chunkLoading}>
+                    {chunkLoading ? (
+                      <>
+                        <Spinner className="mr-2" /> Generating…
+                      </>
+                    ) : (
+                      'Generate chunks'
+                    )}
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div>
+                    <label className="text-xs uppercase tracking-wide text-slate-500">
+                      Chunk size (words)
+                    </label>
+                    <Input
+                      type="number"
+                      min={10}
+                      value={chunkSize}
+                      onChange={(event) => setChunkSize(Number(event.target.value))}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs uppercase tracking-wide text-slate-500">
+                      Overlap (words)
+                    </label>
+                    <Input
+                      type="number"
+                      min={0}
+                      value={chunkOverlap}
+                      onChange={(event) => setChunkOverlap(Number(event.target.value))}
+                    />
                   </div>
                 </div>
-              ))}
-            </CardContent>
-          </Card>
-        </TabsContent>
-      </Tabs>
-    </section>
+                {!chunks.length && (
+                  <p className="text-sm text-slate-500">Generate chunks to preview the sliding window results.</p>
+                )}
+                <div className="grid gap-4 max-h-[400px] overflow-y-auto pr-4">
+                  {chunks.map((chunk, index) => (
+                    <div
+                      key={`${index}-${chunk.slice(0, 10)}`}
+                      className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-900/40 dark:text-slate-300"
+                    >
+                      <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-indigo-500">
+                        Chunk {index + 1}
+                      </p>
+                      {chunk}
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="chat">
+            <ChatCalcTab tokenizer={tokenizer} />
+          </TabsContent>
+
+          <TabsContent value="diff">
+            <DiffToolTab analysis={analysis} />
+          </TabsContent>
+
+          <TabsContent value="projects">
+            <Card className="mt-4">
+              <CardHeader>
+                <CardTitle>Project workspaces</CardTitle>
+                <p className="text-sm text-slate-500 dark:text-slate-400">
+                  Organize runs into enterprise-ready workspaces.
+                </p>
+              </CardHeader>
+              <CardContent>
+                <ProjectManager />
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="overview">
+            {!analysis && (
+              <p className="mt-4 text-sm text-slate-500">
+                Run an analysis to populate the overview charts and table above.
+              </p>
+            )}
+            {analysis && (
+              <p className="mt-4 text-sm text-slate-500">
+                Overview data is already visualized above — use other tabs for specialized tools.
+              </p>
+            )}
+          </TabsContent>
+        </Tabs>
+      </section>
+
+      <CommandPalette
+        open={commandOpen}
+        onOpenChange={setCommandOpen}
+        options={commandOptions}
+        onSelect={setSelectedTab}
+      />
+    </>
   )
 }
 

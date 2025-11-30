@@ -7,6 +7,7 @@ import type { ReactNode } from 'react'
 import ThemeToggle from '@/app/components/ThemeToggle'
 import { AppStateProvider } from '@/app/providers/app-state'
 import { cn } from '@/lib/utils'
+import { LatencyMonitor } from '@/components/platform/LatencyMonitor'
 
 const NAV_LINKS = [
   { href: '/', label: 'Home', description: 'Project overview' },
@@ -100,9 +101,10 @@ export function AppShell({ children }: AppShellProps) {
         <footer className="mt-16 border-t border-slate-200 bg-white/80 py-6 text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900/80">
           <div className="mx-auto flex max-w-6xl flex-col gap-4 px-6 sm:flex-row sm:items-center sm:justify-between">
             <p>© {new Date().getFullYear()} myTokenTools — Built for capstone excellence.</p>
-            <p className="text-xs uppercase tracking-wide text-slate-400">
-              Flask · Next.js 15 · Tailwind CSS · Docker
-            </p>
+            <div className="flex flex-col items-start gap-1 text-xs uppercase tracking-wide text-slate-400 sm:items-end">
+              <span>Flask · Next.js 15 · Tailwind CSS · Docker</span>
+              <LatencyMonitor />
+            </div>
           </div>
         </footer>
       </div>
