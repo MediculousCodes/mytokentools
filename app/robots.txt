@@ -1,0 +1,7 @@
+User-agent: *
+Allow: /
+
+# Optional: specific disallow rules for API routes if you don't want them crawled
+Disallow: /api/
+
+# Host: mytokentools.jeremyjohnsonwall.com
