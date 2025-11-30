@@ -455,8 +455,10 @@ export default function CoreToolPage() {
         <Card
           {...getRootProps()}
           className={cn(
-            'cursor-pointer border-dashed px-8 py-10 text-center transition-colors',
-            isDragActive ? 'border-indigo-500 bg-indigo-50/60' : 'border-slate-200 bg-white/70',
+            'cursor-pointer border-dashed px-8 py-10 text-center transition-colors dark:bg-slate-900/50 dark:border-slate-800 dark:hover:border-indigo-500/60 dark:hover:bg-indigo-500/5',
+            isDragActive
+              ? 'border-indigo-500 bg-indigo-50/60 dark:bg-indigo-500/20'
+              : 'border-slate-200 bg-white/70',
           )}
         >
           <input {...getInputProps()} />

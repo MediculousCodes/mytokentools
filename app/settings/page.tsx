@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { Check, Cog, Database } from 'lucide-react'
+import { Check, Cog } from 'lucide-react'
 
 import {
   Card,
@@ -22,9 +22,6 @@ const TOKENIZERS = [
 
 export default function SettingsPage() {
   const { tokenizer, setTokenizer } = useAppState()
-  const [apiUrl, setApiUrl] = useState('http://localhost:5000')
-  const [autoPurge, setAutoPurge] = useState(true)
-
   return (
     <section className="space-y-10">
       <header className="space-y-3">
@@ -38,7 +35,7 @@ export default function SettingsPage() {
         </p>
       </header>
 
-      <div className="grid gap-6 lg:grid-cols-2">
+      <div>
         <Card>
           <CardHeader>
             <div className="flex items-center gap-3">
@@ -69,62 +66,6 @@ export default function SettingsPage() {
                   {tokenizer === option.value && <Check className="size-4" />}
                 </button>
               ))}
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <div className="flex items-center gap-3">
-              <Database className="size-10 rounded-xl bg-indigo-50 p-2 text-indigo-600 dark:bg-indigo-500/20 dark:text-indigo-200" />
-              <div>
-                <CardTitle>Environment Targets</CardTitle>
-                <CardDescription>Document the upstream Flask URL and retention policy.</CardDescription>
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div>
-              <label className="text-sm font-semibold text-slate-600 dark:text-slate-300">
-                Backend base URL
-              </label>
-              <input
-                className="mt-1 w-full rounded-xl border border-slate-200 bg-transparent px-4 py-2 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-500 dark:border-slate-800"
-                value={apiUrl}
-                onChange={(event) => setApiUrl(event.target.value)}
-              />
-              <p className="text-xs text-slate-500 dark:text-slate-400">
-                Will be stored in `.env.local` as <code>NEXT_PUBLIC_API_BASE_URL</code>.
-              </p>
-            </div>
-            <div className="flex items-center justify-between rounded-2xl border border-slate-200 px-4 py-3 dark:border-slate-800">
-              <div>
-                <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">
-                  Auto purge uploads
-                </p>
-                <p className="text-xs text-slate-500">
-                  Delete temporary files from storage 24 hours after processing.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setAutoPurge((prev) => !prev)}
-                className={`relative inline-flex h-7 w-12 items-center rounded-full transition-colors ${
-                  autoPurge ? 'bg-indigo-600' : 'bg-slate-300'
-                }`}
-              >
-                <span
-                  className={`inline-block size-5 transform rounded-full bg-white transition-transform ${
-                    autoPurge ? 'translate-x-5' : 'translate-x-1'
-                  }`}
-                />
-              </button>
-            </div>
-            <div className="flex flex-wrap gap-3">
-              <Button variant="outline">Save to .env template</Button>
-              <Button asChild>
-                <a href="/docs#deployment">Open deployment guide</a>
-              </Button>
             </div>
           </CardContent>
         </Card>
