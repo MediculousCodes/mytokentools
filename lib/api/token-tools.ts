@@ -1,7 +1,6 @@
-const RAW_BASE_URL =
-  (process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:5000').replace(/\/$/, '') || ''
+const RAW_BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL ?? '').replace(/\/$/, '')
 
-const buildUrl = (path: string) => `${RAW_BASE_URL}${path}`
+const buildUrl = (path: string) => (RAW_BASE_URL ? `${RAW_BASE_URL}${path}` : path)
 
 type JsonPayload = Record<string, unknown>
 
@@ -109,19 +108,19 @@ type AnalyzeResponse = {
 }
 
 export const analyzeText = (text: string, encoding: string) =>
-  postJson<AnalyzeResponse>('/analyze', { text, encoding })
+  postJson<AnalyzeResponse>('/api/analyze', { text, encoding })
 
 type BatchResponse = {
   results: { token_count: number; word_count: number }[]
 }
 
 export const batchTokenize = (texts: string[], encoding: string) =>
-  postJson<BatchResponse>('/batch_tokenize', { texts, encoding })
+  postJson<BatchResponse>('/api/batch_tokenize', { texts, encoding })
 
 type CompareResponse = {
   results: Record<string, number | string>
 }
 
 export const compareTokenizers = (text: string, encodings: string[]) =>
-  postJson<CompareResponse>('/compare_tokenizers', { text, encodings })
+  postJson<CompareResponse>('/api/compare_tokenizers', { text, encodings })
 
