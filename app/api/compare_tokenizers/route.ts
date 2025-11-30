@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server'
 
-const BACKEND_BASE = (process.env.BACKEND_URL ?? 'http://localhost:5000').replace(/\/$/, '')
+const fallbackBase =
+  process.env.NODE_ENV === 'production' ? 'http://token-counter-backend:5000' : 'http://localhost:5000'
+
+const BACKEND_BASE = (process.env.BACKEND_URL?.trim() || fallbackBase).replace(/\/$/, '')
 
 export const runtime = 'nodejs'
 
