@@ -48,6 +48,14 @@ def health():
     """Health check endpoint"""
     return jsonify({'status': 'healthy'}), 200
 
+def safe_encode(encoding, text, context='provided text'):
+    """Safely encode text, capturing low-level tokenizer errors (e.g., stack overflow)."""
+    try:
+        return encoding.encode(text)
+    except Exception as exc:
+        raise RuntimeError(f"Failed to tokenize {context}. The file might be too large or malformed.") from exc
+
+
 @app.route('/analyze', methods=['POST'])
 def analyze():
     """
@@ -74,7 +82,7 @@ def analyze():
         except ValueError:
             return jsonify({'error': f'Invalid encoding: {encoding_name}'}), 400
 
-        tokens = encoding.encode(text)
+        tokens = safe_encode(encoding, text, context='request body')
         token_count = len(tokens)
         word_count = get_word_count(text)
             
@@ -111,7 +119,7 @@ def batch_tokenize():
 
         results = []
         for text in texts:
-            tokens = encoding.encode(text)
+            tokens = safe_encode(encoding, text, context='request body')
             results.append({
                 'token_count': len(tokens),
                 'word_count': get_word_count(text)
@@ -144,7 +152,8 @@ def compare_tokenizers():
         for encoding_name in encodings:
             try:
                 encoding = tiktoken.get_encoding(encoding_name)
-                tokens = encoding.encode(text)
+                tokens = safe_encode(encoding, text, context=f"{filename}/{member}")
+                tokens = safe_encode(encoding, text, context=filename)
                 results[encoding_name] = len(tokens)
             except ValueError:
                 results[encoding_name] = "Invalid encoding"
