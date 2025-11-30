@@ -17,8 +17,6 @@ import io
 import zipfile
 from werkzeug.utils import secure_filename
 
-MAX_CHAR_COUNT = 2_000_000  # ~2 MB of UTF-8 text, prevents tokenizer stack overflow
-
 app = Flask(__name__)
 CORS(app)
 logger = logging.getLogger(__name__)
@@ -61,14 +59,6 @@ def safe_encode(encoding, text, context='provided text'):
         raise RuntimeError(f"Failed to tokenize {context}. The file might be too large or malformed.") from exc
 
 
-def validate_text_size(text, context='provided text'):
-    if len(text) > MAX_CHAR_COUNT:
-        raise ValueError(
-            f"{context} is too large ({len(text):,} characters). "
-            f"Please split the file into smaller parts (<= {MAX_CHAR_COUNT:,} chars) and try again."
-        )
-
-
 @app.route('/analyze', methods=['POST'])
 def analyze():
     """
@@ -89,7 +79,6 @@ def analyze():
         
         text = data['text']
         encoding_name = data.get('encoding', 'cl100k_base')
-        validate_text_size(text, context='request body')
         
         try:
             encoding = tiktoken.get_encoding(encoding_name)
@@ -135,7 +124,6 @@ def batch_tokenize():
 
         results = []
         for idx, text in enumerate(texts, start=1):
-            validate_text_size(text, context=f'batch item #{idx}')
             tokens = safe_encode(encoding, text, context=f'batch item #{idx}')
             results.append({
                 'token_count': len(tokens),
@@ -167,7 +155,6 @@ def compare_tokenizers():
         text = data['text']
         encodings = data['encodings']
         results = {}
-        validate_text_size(text, context='comparison request body')
 
         for encoding_name in encodings:
             try:
@@ -234,7 +221,6 @@ def count_tokens():
                                     text = f.read().decode('utf-8')
                                 except Exception:
                                     text = f.read().decode('latin-1', errors='replace')
-                                validate_text_size(text, context=f"{filename}/{member}")
                                 tokens = safe_encode(encoding, text, context=f"{filename}/{member}")
                                 token_count = len(tokens)
                                 word_count = len(re.findall(r'\w+', text))
@@ -250,7 +236,6 @@ def count_tokens():
                 except Exception:
                     text = data.decode('latin-1', errors='replace')
 
-                validate_text_size(text, context=filename)
                 tokens = safe_encode(encoding, text, context=filename)
                 token_count = len(tokens)
                 word_count = len(re.findall(r'\w+', text))
