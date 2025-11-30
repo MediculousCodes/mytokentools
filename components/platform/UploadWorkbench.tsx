@@ -42,27 +42,27 @@ export function UploadWorkbench({
 }: UploadWorkbenchProps) {
   return (
     <div className="grid gap-6 lg:grid-cols-[2fr,1fr]">
-      <Card
-        {...getRootProps()}
-        className={cn(
-          'cursor-pointer border-dashed px-8 py-10 text-center transition-colors dark:bg-slate-900/50 dark:border-slate-800 dark:hover:border-indigo-500/60 dark:hover:bg-indigo-500/5',
-          isDragActive
-            ? 'border-indigo-500 bg-indigo-50/60 dark:bg-indigo-500/20'
-            : 'border-slate-200 bg-white/70',
-        )}
-      >
-        <input {...getInputProps()} />
-        <CardHeader>
-          <CardTitle>Drop files anywhere in this surface</CardTitle>
-          <CardDescription>.txt · .md · .zip (nested extraction supported)</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-6">
-          <div className="text-sm text-slate-500 dark:text-slate-300">
+      <div className="space-y-4">
+        <Card
+          {...getRootProps()}
+          className={cn(
+            'cursor-pointer border-dashed px-8 py-10 text-center transition-colors dark:bg-slate-900/50 dark:border-slate-800 dark:hover:border-indigo-500/60 dark:hover:bg-indigo-500/5',
+            isDragActive
+              ? 'border-indigo-500 bg-indigo-50/60 dark:bg-indigo-500/20'
+              : 'border-slate-200 bg-white/70',
+          )}
+        >
+          <input {...getInputProps()} />
+          <CardHeader>
+            <CardTitle>Drop files anywhere in this surface</CardTitle>
+            <CardDescription>.txt · .md · .zip (nested extraction supported)</CardDescription>
+          </CardHeader>
+          <CardContent className="text-sm text-slate-500 dark:text-slate-300">
             Use the preprocessing pipeline below to normalize content before tokenizing.
-          </div>
-          <PreprocessSettings />
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
+        <PreprocessSettings />
+      </div>
 
       <div className="space-y-4">
         <Card>
