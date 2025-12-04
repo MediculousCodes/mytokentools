@@ -1,60 +1,53 @@
-# token-counter-docker/docker-compose.yml
-
 services:
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
-      # Use host networking for faster package downloads during build
       network: host
     container_name: token-counter-backend
-    # No ports needed; Caddy and frontend will use the internal Docker network
+    restart: unless-stopped
     environment:
       - FLASK_ENV=development
       - FLASK_RUN_HOST=0.0.0.0
     networks:
-      - token-counter-network
-    restart: unless-stopped
+      - default
+      - proxy # Connect to the shared Traefik network
+    labels:
+      - "traefik.enable=true"
+      # Route requests starting with /api to the backend
+      - "traefik.http.routers.token-backend.rule=Host(`mytokentools.jeremyjohnsonwall.com`) && PathPrefix(`/api`)"
+      - "traefik.http.services.token-backend.loadbalancer.server.port=5000"
+      - "traefik.http.routers.token-backend.entrypoints=web"
 
   frontend:
     build:
-      context: . # Build from the root directory
+      context: .
       dockerfile: Dockerfile.frontend
-      # Use host networking for faster 'pnpm install'
       network: host
     container_name: token-counter-frontend
-    # !!! PORTS REMOVED !!!
-    # Caddy will now handle all public traffic and forward it here.
+    restart: unless-stopped
     depends_on:
       - backend
     environment:
       - NODE_ENV=production
       - BACKEND_URL=http://token-counter-backend:5000
-      - NEXT_PUBLIC_API_BASE_URL=
+      # Browsers will hit the backend via the same domain at /api
+      - NEXT_PUBLIC_API_BASE_URL=/api
     networks:
-      - token-counter-network
-    restart: unless-stopped
-
-  # --- ADD THIS NEW CADDY SERVICE ---
-  caddy:
-    image: caddy:latest
-    container_name: token-counter-caddy
-    restart: unless-stopped
-    ports:
-      - "80:80"   # For standard HTTP traffic (and SSL auto-redirect)
-      - "443:443" # For standard HTTPS traffic
-    volumes:
-      # Mount the Caddyfile you created into the container
-      - ./Caddyfile:/etc/caddy/Caddyfile
-      # Create a named volume to store SSL certificates persistently
-      - caddy_data:/data
-    networks:
-      - token-counter-network
+      - default
+      - proxy # Connect to the shared Traefik network
+    labels:
+      - "traefik.enable=true"
+      # Route everything else to the frontend
+      - "traefik.http.routers.token-frontend.rule=Host(`mytokentools.jeremyjohnsonwall.com`)"
+      - "traefik.http.services.token-frontend.loadbalancer.server.port=3000" # Assuming Next.js runs on 3000
+      - "traefik.http.routers.token-frontend.entrypoints=web"
 
 networks:
-  token-counter-network:
+  # Internal communication for this app
+  default:
     driver: bridge
-
-# --- ADD THIS NAMED VOLUME ---
-volumes:
-  caddy_data:
+  # External network to talk to Traefik
+  proxy:
+    name: traefik_proxy # CHANGE THIS to match your actual Traefik network name
+    external: true
